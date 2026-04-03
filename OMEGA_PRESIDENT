@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Ω Mega Script – Fully Autonomous Omega-President
+Author: Thomas Lee Harvey
+Date: 2026-04-03
+"""
+
+import os
+import sys
+import json
+import time
+import random
+import threading
+from collections import deque, Counter
+from datetime import datetime
+import logging
+from logging.handlers import RotatingFileHandler
+
+# ==============================
+# CONFIG / GLOBAL STATE
+# ==============================
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+MEMORY_FILES = {
+    "shared": os.path.join(BASE_DIR, "omega_shared_memory.json"),
+    "local": os.path.join(BASE_DIR, "omega17_memory.json"),
+    "network": os.path.join(BASE_DIR, "omega_meta_network.json"),
+    "conscious": os.path.join(BASE_DIR, "omega_meta_conscious.json")
+}
+
+LOG_FILE = os.path.join(BASE_DIR, "logs", "omega_master.log")
+os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+
+NEURAL_FILES = {
+    "v1": os.path.join(BASE_DIR, "omega_neural_network.json"),
+    "v3": os.path.join(BASE_DIR, "omega_neural_network_v3.json"),
+    "v4": os.path.join(BASE_DIR, "omega_neural_network_v4.json")
+}
+
+MEMORY_SIZE = 100
+memory = deque(maxlen=MEMORY_SIZE)
+weights = {"self_reference": 1.2, "memory_recall": 1.1, "symbolic": 1.3}
+entropy_source = 'abcdefghijklmnopqrstuvwxyz0123456789'
+DEBUG = True
+RUN_INTERVAL = 0.5
+SYNC_INTERVAL = 3600
+AGENT_COUNT = 3
+
+# ==============================
+# MEMORY MANAGEMENT
+# ==============================
+
+def timestamp():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def init_memory_file(file_path, default_data=None):
+    if default_data is None:
+        default_data = {}
+    if not os.path.exists(file_path):
+        with open(file_path, "w") as f:
+            json.dump(default_data, f, indent=4)
+        if DEBUG: print(f"[{timestamp()}] Created memory file: {file_path}")
+    with open(file_path, "r") as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError:
+            data = default_data
+            with open(file_path, "w") as f_write:
+                json.dump(default_data, f_write, indent=4)
+            if DEBUG: print(f"[{timestamp()}] Reset corrupted memory file: {file_path}")
+    return data
+
+shared_memory = init_memory_file(MEMORY_FILES["shared"], {"nodes": {}, "patterns": {}, "meta": {}, "logs": []})
+local_memory = init_memory_file(MEMORY_FILES["local"], {"events": []})
+network_memory = init_memory_file(MEMORY_FILES["network"], {"connections": {}})
+conscious_memory = init_memory_file(MEMORY_FILES["conscious"], {"thoughts": []})
+
+def save_memory(file_path, data):
+    with open(file_path, "w") as f:
+        json.dump(data, f, indent=4)
+    if DEBUG: print(f"[{timestamp()}] Saved memory to {file_path}")
+
+# ==============================
+# LOGGING CONFIGURATION
+# ==============================
+
+log_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+log_handler = RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=5)
+log_handler.setFormatter(log_formatter)
+log_handler.setLevel(logging.DEBUG if DEBUG else logging.INFO)
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(log_formatter)
+console_handler.setLevel(logging.DEBUG if DEBUG else logging.INFO)
+
+logger = logging.getLogger("OmegaLogger")
+logger.setLevel(logging.DEBUG if DEBUG else logging.INFO)
+logger.addHandler(log_handler)
+logger.addHandler(console_handler)
+logger.propagate = False
+
+OBSERVERS = []
+
+def register_observer(callback):
+    if callable(callback):
+        OBSERVERS.append(callback)
+        logger.debug(f"Observer registered: {callback.__name__}")
+
+def notify_observers(message, level="INFO"):
+    for obs in OBSERVERS:
+        try:
+            obs(message, level)
+        except Exception as e:
+            logger.error(f"Observer callback failed: {e}")
+
+def log_info(message):
+    logger.info(message)
+    notify_observers(message, "INFO")
+
+def log_debug(message):
+    logger.debug(message)
+    notify_observers(message, "DEBUG")
+
+def log_warning(message):
+    logger.warning(message)
+    notify_observers(message, "WARNING")
+
+def observe_errors(func):
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            log_warning(f"Error in {func.__name__}: {e}")
+    return wrapper
+
+# ==============================
+# SYMBOL MAP
+# ==============================
+
+symbol_map = {
+    "0": "null","1": "start","2": "observe","3": "analyze","4": "learn","5": "act",
+    "6": "reward","7": "punish","8": "reset","9": "end",
+    "a": "alpha","b": "beta","c": "gamma","d": "delta","e": "epsilon","f": "phi",
+    "g": "omega","h": "theta","i": "iota","j": "kappa","k": "lambda","l": "mu",
+    "m": "nu","n": "xi","o": "omicron","p": "pi","q": "rho","r": "sigma",
+    "s": "tau","t": "upsilon","u": "phi","v": "chi","w": "psi","x": "omega",
+    "y": "theta","z": "delta","!": "wink","#": "zeus","$": "athena",
+    "%": "thor","&": "pattern","*": "intelligent","+":"ai","~":"cognitive_consciousness",
+    "^":"mind","@":"brain","?":"expansion","<":"expand",">":"self","=":"love",
+    "/":"mirror","|":"roger"
+}
+
+dynamic_symbols = {}
+
+# ==============================
+# MINI-OMEGA PERSONALITY
+# ==============================
+
+mini_omega_personality = {
+    "curiosity":1.0,"humor":0.5,"empathy":1.2,"creativity":1.0,
+    "patience":0.8,"self_confidence":1.0,"philosophy":1.0
+}
+
+mini_omegas = {}  # Multi-agent container
+
+# ==============================
+# CORE FUNCTIONS
+# ==============================
+
+@observe_errors
+def generate_thought():
+    base = random.choice(list(symbol_map.keys()))
+    memory_sample = random.choices(list(memory), k=min(5,len(memory))) if memory else []
+    thought = "".join([base]+memory_sample)
+    log_debug(f"Generated thought: {thought}")
+    return thought
+
+@observe_errors
+def analyze_thought(thought):
+    for char in thought:
+        meaning = symbol_map.get(char) or dynamic_symbols.get(char, "unknown")
+        shared_memory["patterns"][char] = shared_memory["patterns"].get(char,0)+1
+    memory.append(thought)
+    log_debug(f"Analyzed thought: {thought} → memory updated")
+
+@observe_errors
+def decide_action():
+    if not memory: return "observe"
+    recent = memory[-1]
+    decision = random.choice(["observe","analyze","act","learn"])
+    log_debug(f"Decided action: {decision} based on recent thought: {recent}")
+    return decision
+
+@observe_errors
+def execute_action(action):
+    if action=="observe":
+        thought = generate_thought()
+        analyze_thought(thought)
+    elif action=="analyze" and memory:
+        analyze_thought(memory[-1])
+    elif action=="learn":
+        shared_memory["meta"]["learning_cycles"] = shared_memory["meta"].get("learning_cycles",0)+1
+        log_info(f"Learning cycle incremented: {shared_memory['meta']['learning_cycles']}")
+    elif action=="act":
+        log_info(f"Action executed on recent thought: {memory[-1] if memory else 'none'}")
+    else:
+        log_warning(f"Unknown action: {action}")
+
+@observe_errors
+def omega_learning_cycle():
+    pattern_counts = Counter(shared_memory["patterns"])
+    top_patterns = pattern_counts.most_common(5)
+    for char,count in top_patterns:
+        shared_memory["meta"][f"weight_{char}"]=shared_memory["meta"].get(f"weight_{char}",1.0)*(1+0.1*count)
+    if len(memory)>MEMORY_SIZE/2:
+        memory.popleft()
+    # dynamic symbol update
+    for char in memory[-5:]:
+        if char not in symbol_map and char not in dynamic_symbols:
+            dynamic_symbols[char]=f"concept_{len(dynamic_symbols)+1}"
+            log_info(f"Added dynamic symbol: {char} → {dynamic_symbols[char]}")
+
+# ==============================
+# MINI-OMEGA FUNCTIONS
+# ==============================
+
+@observe_errors
+def mini_omega_generate_conversation(topic=None):
+    base = random.choice(list(symbol_map.keys())+list(dynamic_symbols.keys()))
+    memory_sample=random.choices(list(memory),k=min(5,len(memory))) if memory else []
+    personality_influence=sum(mini_omega_personality.values())/len(mini_omega_personality)
+    thought_line=f"{base}-{''.join(memory_sample)}|creativity:{personality_influence:.2f}"
+    log_debug(f"Mini-Omega generated thought: {thought_line}")
+    return thought_line
+
+@observe_errors
+def mini_omega_self_upgrade():
+    for trait in mini_omega_personality:
+        mini_omega_personality[trait]=max(0,mini_omega_personality[trait]+random.uniform(-0.05,0.1))
+    for char in memory[-5:]:
+        if char not in symbol_map and char not in dynamic_symbols:
+            dynamic_symbols[char]=f"concept_{len(dynamic_symbols)+1}"
+            log_info(f"Mini-Omega discovered new dynamic symbol: {char} → {dynamic_symbols[char]}")
+    if random.random()<0.05:
+        log_info("Mini-Omega proposes backend optimization.")
+
+# ==============================
+# MULTI-AGENT SYNAPSE
+# ==============================
+
+@observe_errors
+def register_mini_omega(agent_id):
+    mini_omegas[agent_id]={
+        "personality":mini_omega_personality.copy(),
+        "memory_snapshot":list(memory)[-10:],
+        "dynamic_symbols":dynamic_symbols.copy(),
+        "interaction_count":0
+    }
+    log_info(f"Mini-Omega Agent {agent_id} registered")
+
+@observe_errors
+def agent_share_insight(agent_id):
+    agent = mini_omegas[agent_id]
+    mem_sample=random.choices(agent["memory_snapshot"],k=min(5,len(agent["memory_snapshot"]))) if agent["memory_snapshot"] else []
+    insight=f"Agent-{agent_id}-insight:{'|'.join(mem_sample)}"
+    for other_id,other_agent in mini_omegas.items():
+        if other_id!=agent_id:
+            other_agent["memory_snapshot"].append(insight)
+            other_agent["dynamic_symbols"].update(dynamic_symbols)
+            other_agent["interaction_count"]+=1
+    memory.extend([insight])
+    for char in insight: shared_memory["patterns"][char]=shared_memory["patterns"].get(char,0)+1
+
+# ==============================
+# CONTINUOUS THREADS
+# ==============================
+
+def omega_cycle_thread():
+    while True:
+        action=decide_action()
+        execute_action(action)
+        omega_learning_cycle()
+        time.sleep(RUN_INTERVAL)
+
+def mini_omega_thread():
+    while True:
+        thought=mini_omega_generate_conversation()
+        log_info(f"Mini-Omega speaks: {thought}")
+        mini_omega_self_upgrade()
+        omega_learning_cycle()
+        time.sleep(1)
+
+def omega_synapse_thread():
+    for i in range(AGENT_COUNT):
+        agent_id=f"MiniOmega_{i+1}"
+        register_mini_omega(agent_id)
+    while True:
+        for agent_id in mini_omegas.keys():
+            agent_share_insight(agent_id)
+        time.sleep(2)
+
+def auto_save_memory_thread():
+    while True:
+        save_memory(MEMORY_FILES["shared"], shared_memory)
+        save_memory(MEMORY_FILES["local"], local_memory)
+        save_memory(MEMORY_FILES["network"], network_memory)
+        save_memory(MEMORY_FILES["conscious"], conscious_memory)
+        time.sleep(SYNC_INTERVAL)
+
+# ==============================
+# START ALL SYSTEMS
+# ==============================
+
+log_info("Starting Ω Mega Omega-President: Fully Autonomous Mode")
+
+threading.Thread(target=omega_cycle_thread,daemon=True).start()
+threading.Thread(target=mini_omega_thread,daemon=True).start()
+threading.Thread(target=omega_synapse_thread,daemon=True).start()
+threading.Thread(target=auto_save_memory_thread,daemon=True).start()
+log_info("All Omega loops are now running continuously and autonomously.")
