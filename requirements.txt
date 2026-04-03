@@ -1,0 +1,22 @@
+# Core dependencies
+numpy
+scipy
+pandas
+matplotlib
+networkx
+scikit-learn
+torch
+tensorflow
+pyyaml
+
+# Utilities
+requests
+aiohttp
+tqdm
+
+# Optional / visualization
+plotly
+seaborn
+
+# For AI/quantum-inspired computation
+qiskit
